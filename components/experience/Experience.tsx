@@ -111,10 +111,13 @@ function Journey() {
   if (fallback) return <StaticInvitation />;
   if (!trollComplete)
     return (
-      <TrollOpening
-        onMusicHandoff={handoffToScene01}
-        onComplete={completeTroll}
-      />
+      <>
+        <TrollOpening
+          onMusicHandoff={handoffToScene01}
+          onComplete={completeTroll}
+        />
+        <AudioIndicator />
+      </>
     );
   return (
     <main
