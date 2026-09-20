@@ -165,6 +165,73 @@ class FakeAudio extends EventTarget {
     return "probably";
   }
 }
+test("a gesture retries a pending autoplay AudioContext resume", async () => {
+  class SuspendedContext extends FakeAudioContext {
+    state = "suspended";
+    calls = 0;
+    release?: () => void;
+    static instance: SuspendedContext;
+    constructor() {
+      super();
+      SuspendedContext.instance = this;
+    }
+    async resume() {
+      this.calls++;
+      if (this.calls === 1) {
+        await new Promise<void>((resolve) => { this.release = resolve; });
+      } else {
+        this.state = "running";
+        this.release?.();
+      }
+    }
+  }
+  Object.assign(globalThis, {
+    Audio: FakeAudio,
+    AudioContext: SuspendedContext,
+    matchMedia: () => ({ matches: false }),
+  });
+  const m = new AudioManager();
+  try {
+    m.enterScene("scene00");
+    const autoplay = m.unlock();
+    assert.equal(SuspendedContext.instance.calls, 1);
+    const gesture = m.unlock();
+    assert.equal(SuspendedContext.instance.calls, 2);
+    await Promise.all([autoplay, gesture]);
+    assert.equal(m.ready, true);
+    assert.equal(m.playing, true);
+  } finally {
+    m.destroy();
+  }
+});
+
+test("play is requested before metadata arrives on a cold load", async () => {
+  class ColdAudio extends FakeAudio {
+    readyState = 0;
+    async play() {
+      assert.equal(this.readyState, 0);
+      this.paused = false;
+      queueMicrotask(() => {
+        this.readyState = 4;
+        this.dispatchEvent(new Event("loadedmetadata"));
+      });
+    }
+  }
+  Object.assign(globalThis, {
+    Audio: ColdAudio,
+    AudioContext: FakeAudioContext,
+    matchMedia: () => ({ matches: false }),
+  });
+  const m = new AudioManager();
+  try {
+    m.enterScene("scene00");
+    await m.unlock();
+    assert.equal(m.playing, true);
+  } finally {
+    m.destroy();
+  }
+});
+
 test("manager crossfades, cancels stale exits, loops and remembers reverse navigation", async () => {
   Object.assign(globalThis, {
     Audio: FakeAudio,
