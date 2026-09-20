@@ -412,7 +412,8 @@ button {
   transform-origin: left;
 }
 .audio-indicator {
-  position: absolute;
+  position: fixed;
+  z-index: 60;
   right: 28px;
   top: 25px;
   width: 44px;
