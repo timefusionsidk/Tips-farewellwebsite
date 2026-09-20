@@ -10,16 +10,17 @@ export function AudioIndicator() {
   );
   const available = useSyncExternalStore(
     audio.subscribe,
-    () => audio.available && audio.ready,
-    () => false,
+    () => audio.available,
+    () => audio.available,
   );
   if (!available) return null;
   return (
     <button
       className="audio-indicator"
-      aria-label={playing ? "Pause music" : "Resume music"}
+      aria-label={playing ? "Pause music" : "Enable music"}
       aria-pressed={playing}
       onClick={() => (playing ? audio.pause() : audio.resume())}
+      title={playing ? "Pause music" : "Enable music"}
     >
       {playing ? "Ⅱ" : "♪"}
     </button>
