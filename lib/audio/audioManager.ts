@@ -217,6 +217,10 @@ export class AudioManager {
   }
 
   private syncGestureUnlock() {
+    if (this.paused) {
+      this.detachGestureUnlock();
+      return;
+    }
     if (this.isActiveAudible()) {
       this.autoplayBlocked = false;
       this.detachGestureUnlock();
@@ -227,10 +231,16 @@ export class AudioManager {
   }
 
   async unlock() {
+    // An autoplay resume() may remain pending until a trusted gesture. Retry
+    // resume synchronously on that gesture, even while the first unlock waits.
+    if (this.context && this.context.state !== "running") {
+      void this.context.resume().catch(() => this.syncGestureUnlock());
+    }
     if (this.unlocking) return this.unlocking;
-    this.unlocking = this.performUnlock().finally(() => {
-      this.unlocking = undefined;
+    const attempt = this.performUnlock().finally(() => {
+      if (this.unlocking === attempt) this.unlocking = undefined;
     });
+    this.unlocking = attempt;
     return this.unlocking;
   }
 
@@ -252,10 +262,11 @@ export class AudioManager {
         this.master.connect(this.context.destination);
         this.log("AudioContext created", this.context.state);
       }
-      if (this.context.state === "suspended") {
-        await this.context.resume();
-        this.log("AudioContext resume", this.context.state);
-      }
+      const context = this.context;
+      this.attachGestureUnlock();
+      if (context.state !== "running") await context.resume();
+      // Strict Mode cleanup or unmount can dispose an in-flight unlock.
+      if (this.context !== context) return;
       const isRunning =
         !this.context.state || this.context.state === "running";
       // Context may be running while media play() is still blocked.
@@ -411,6 +422,8 @@ export class AudioManager {
   }
 
   private async play(id: SceneId, generation: number, crossfade?: Crossfade) {
+    if (generation !== this.generation || this.active !== id || this.paused)
+      return;
     const channel = this.getChannel(id);
     if (!channel || channel.failed) return;
 
@@ -418,6 +431,13 @@ export class AudioManager {
     this.log("play attempted", id);
 
     try {
+      // Request playback before metadata loading can consume user activation.
+      // Observe rejection immediately while metadata loads to avoid an
+      // unhandled rejection when autoplay is denied.
+      const playback = channel.audio.play().then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
       if (channel.audio.readyState < 1)
         await new Promise<void>((resolve, reject) => {
           const a = channel.audio;
@@ -455,6 +475,7 @@ export class AudioManager {
       ) {
         channel.failed = true;
         this.disabled.add(id);
+        channel.audio.pause();
         this.warn("Invalid source duration for " + id);
         this.emit();
         return;
@@ -468,7 +489,8 @@ export class AudioManager {
       );
       if (crossfade) this.setGain(channel, 0);
 
-      await channel.audio.play();
+      const result = await playback;
+      if (!result.ok) throw result.error;
 
       if (generation !== this.generation || this.active !== id || this.paused) {
         channel.audio.pause();
@@ -516,6 +538,7 @@ export class AudioManager {
         this.log("autoplay blocked", { scene: id, error });
         this.syncGestureUnlock();
       } else {
+        if (generation === this.generation) channel.audio.pause();
         this.warn("Audio could not start: " + id);
         this.log("play failed", { scene: id, error });
       }
@@ -563,6 +586,7 @@ export class AudioManager {
 
   pause() {
     this.paused = true;
+    this.detachGestureUnlock();
     this.generation++;
     clearTimeout(this.pending);
     for (const [id, c] of this.channels) {
@@ -636,6 +660,7 @@ export class AudioManager {
     this.context = undefined;
     this.master = undefined;
     this.unlocked = false;
+    this.unlocking = undefined;
     this.autoplayBlocked = false;
   }
 }
